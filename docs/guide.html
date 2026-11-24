@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Model Orchestrator: Technical Guide</title>
+<style>
+  :root { --ink:#1b1f2a; --mute:#5b6372; --line:#d9dde5; --accent:#3b4fd8; --soft:#f3f5fb; --warn:#9a4b00; --ok:#1e7a46; }
+  * { box-sizing: border-box; }
+  html { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--ink); font-size: 10.5pt; line-height: 1.5; }
+  body { margin: 0 auto; max-width: 820px; padding: 24px; }
+  h1 { font-size: 26pt; line-height: 1.15; margin: 0 0 6px; }
+  h2 { font-size: 16pt; margin: 30px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--accent); break-after: avoid; }
+  h3 { font-size: 12pt; margin: 18px 0 6px; break-after: avoid; }
+  p { margin: 6px 0 9px; }
+  ul, ol { margin: 4px 0 10px 20px; padding: 0; }
+  li { margin: 2px 0; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 9pt; background: var(--soft); padding: 0 3px; border-radius: 3px; }
+  pre { font-family: Consolas, "Cascadia Mono", monospace; font-size: 8.4pt; line-height: 1.38; background: var(--soft); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; margin: 8px 0 12px; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; break-inside: avoid; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 9.4pt; }
+  th, td { border: 1px solid var(--line); padding: 4px 7px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  .cover { padding: 70px 0 40px; border-bottom: 4px solid var(--accent); margin-bottom: 26px; }
+  .cover .sub { font-size: 13pt; color: var(--mute); margin: 8px 0 0; }
+  .cover .meta { margin-top: 28px; color: var(--mute); font-size: 9.5pt; }
+  .callout { border-left: 4px solid var(--accent); background: var(--soft); padding: 8px 12px; margin: 10px 0 14px; break-inside: avoid; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.ok { border-color: var(--ok); }
+  .callout strong:first-child { display: block; margin-bottom: 2px; }
+  .toc { columns: 2; column-gap: 28px; font-size: 10pt; margin: 8px 0 0; }
+  .toc a { color: var(--ink); text-decoration: none; }
+  .toc li { break-inside: avoid; }
+  figure { margin: 12px 0 16px; break-inside: avoid; }
+  figcaption { font-size: 9pt; color: var(--mute); text-align: center; margin-top: 4px; }
+  svg text { font-family: "Segoe UI", system-ui, sans-serif; }
+  .pagebreak { break-after: page; }
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  @media print {
+    body { max-width: none; padding: 0; }
+    a { color: inherit; text-decoration: none; }
+    h2 { break-before: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Model Orchestrator</h1>
+  <p class="sub">Technical guide: routing engineering tasks through Fable, Haiku, Sonnet and Opus with hand-offs, approval gates, an audit loop and an honest run ledger.</p>
+  <p class="meta">Version 1.0 &middot; 2026-11-18 &middot; Node &ge; 22 &middot; single runtime dependency <code>@anthropic-ai/sdk</code><br>Policy source: the Owner's Autonomous Multi-Model Orchestration Framework and Complete Guide v1.0</p>
+</div>
+
+<h3>Contents</h3>
+<ol class="toc">
+  <li><a href="#s1">Overview and what is real vs mock</a></li>
+  <li><a href="#s2">Architecture</a></li>
+  <li><a href="#s3">Model roles, effort and prices</a></li>
+  <li><a href="#s4">Classification and routing levels</a></li>
+  <li><a href="#s5">Pipeline and state machine</a></li>
+  <li><a href="#s6">The hand-off contract</a></li>
+  <li><a href="#s7">Provider details</a></li>
+  <li><a href="#s8">Security model and limits</a></li>
+  <li><a href="#s9">Setup</a></li>
+  <li><a href="#s10">CLI reference and exit codes</a></li>
+  <li><a href="#s11">Run folder and reading reports</a></li>
+  <li><a href="#s12">Testing</a></li>
+  <li><a href="#s13">Pilot plan</a></li>
+  <li><a href="#s14">Troubleshooting</a></li>
+  <li><a href="#s15">Cost notes</a></li>
+</ol>
+
+<h2 id="s1">1. Overview and what is real vs mock</h2>
+<p>The Model Orchestrator is a Node command line controller. You give it an engineering task in plain text. It classifies the task (level 1 to 4), builds a route through up to five model roles, calls each model through the real Anthropic API, passes a structured hand-off between steps, stops at approval gates for risky work, runs an audit, correct and validate loop, and records every step: which model was requested, which model actually answered, how many tokens it used and what that cost.</p>
+<p>The design goal is a <strong>verified result</strong>, not the number of models used. A typo fix goes through one builder and a basic check. A change to authentication goes through a planner, a builder, an independent auditor, a human approval and a final validator.</p>
+
+<div class="callout warn"><strong>Hard rule: never pretend a model ran.</strong>
+If a provider is not configured, the step is <code>BLOCKED</code> with a reason. Every step record stores <code>requestedModel</code> and <code>servedModel</code>, and the served value is read from the API response <code>model</code> field, never assumed. Mock output is labelled <code>provider: "mock"</code> everywhere it appears and the report header says <code>MOCK RUN — no model was called</code>.</div>
+
+<h3>What is real and what is mock</h3>
+<table>
+  <tr><th>Part</th><th>Real</th><th>Mock or not covered</th></tr>
+  <tr><td>Anthropic provider</td><td>Real streaming calls through the official SDK, real token usage, real served model</td><td>Tests use an injected fake client. No test calls the live API, so request shapes are verified against the documented rules but the live behaviour is confirmed only by <code>doctor --probe</code> and a pilot run</td></tr>
+  <tr><td>Claude CLI provider (default)</td><td>Real <code>claude -p</code> process using the Owner's Claude Code login</td><td>Tests use a fake <code>spawn</code>. Served model is "unverified" unless the CLI reports it</td></tr>
+  <tr><td>Mock provider</td><td>Real pipeline, real state machine, real files in the run folder</td><td>The model replies are scripted. Nothing is reviewed by a model. Report says MOCK RUN</td></tr>
+  <tr><td>Classifier, router, gates, redaction, retrieval, ledger, apply</td><td>Real code, identical for every provider</td><td>None</td></tr>
+  <tr><td>Proposed code</td><td>Stored as text under <code>runs/</code></td><td>Never executed or tested by the controller. You review and test it yourself</td></tr>
+</table>
+
+<h2 id="s2">2. Architecture</h2>
+<p>The system has three layers. The <strong>orchestration layer</strong> decides what happens next (classifier, router, state machine, pipeline engine). The <strong>execution layer</strong> talks to models and reads files (providers, retrieval, schemas, hand-offs). The <strong>governance layer</strong> protects you and proves what happened (gates, redaction, ledger, cost, report, apply).</p>
+
+<figure>
+<svg viewBox="0 0 780 470" width="100%" role="img" aria-label="Architecture: three layers around the pipeline engine">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3b4fd8"/></marker>
+  </defs>
+  <rect x="10" y="10" width="760" height="130" rx="10" fill="#eef1ff" stroke="#3b4fd8"/>
+  <text x="24" y="32" font-size="13" font-weight="700" fill="#3b4fd8">ORCHESTRATION LAYER (decides)</text>
+  <rect x="30" y="48" width="130" height="70" rx="6" fill="#fff" stroke="#9aa6e8"/><text x="95" y="76" font-size="12" text-anchor="middle" font-weight="600">classify.mjs</text><text x="95" y="94" font-size="10" text-anchor="middle" fill="#5b6372">level 1-4, risk</text>
+  <rect x="180" y="48" width="130" height="70" rx="6" fill="#fff" stroke="#9aa6e8"/><text x="245" y="76" font-size="12" text-anchor="middle" font-weight="600">router.mjs</text><text x="245" y="94" font-size="10" text-anchor="middle" fill="#5b6372">ordered phases</text>
+  <rect x="330" y="48" width="170" height="70" rx="6" fill="#fff" stroke="#3b4fd8" stroke-width="2"/><text x="415" y="76" font-size="12" text-anchor="middle" font-weight="700">orchestrator.mjs</text><text x="415" y="94" font-size="10" text-anchor="middle" fill="#5b6372">pipeline engine, loops</text>
+  <rect x="520" y="48" width="130" height="70" rx="6" fill="#fff" stroke="#9aa6e8"/><text x="585" y="76" font-size="12" text-anchor="middle" font-weight="600">state.mjs</text><text x="585" y="94" font-size="10" text-anchor="middle" fill="#5b6372">legal transitions</text>
+  <rect x="665" y="48" width="90" height="70" rx="6" fill="#fff" stroke="#9aa6e8"/><text x="710" y="76" font-size="12" text-anchor="middle" font-weight="600">bin/CLI</text><text x="710" y="94" font-size="10" text-anchor="middle" fill="#5b6372">exit codes</text>
+
+  <rect x="10" y="165" width="760" height="130" rx="10" fill="#eefaf3" stroke="#1e7a46"/>
+  <text x="24" y="187" font-size="13" font-weight="700" fill="#1e7a46">EXECUTION LAYER (does)</text>
+  <rect x="30" y="203" width="140" height="70" rx="6" fill="#fff" stroke="#8cc7a5"/><text x="100" y="231" font-size="12" text-anchor="middle" font-weight="600">providers/</text><text x="100" y="249" font-size="10" text-anchor="middle" fill="#5b6372">anthropic | cli | mock</text>
+  <rect x="190" y="203" width="130" height="70" rx="6" fill="#fff" stroke="#8cc7a5"/><text x="255" y="231" font-size="12" text-anchor="middle" font-weight="600">handoff.mjs</text><text x="255" y="249" font-size="10" text-anchor="middle" fill="#5b6372">contract + validate</text>
+  <rect x="340" y="203" width="130" height="70" rx="6" fill="#fff" stroke="#8cc7a5"/><text x="405" y="231" font-size="12" text-anchor="middle" font-weight="600">schemas.mjs</text><text x="405" y="249" font-size="10" text-anchor="middle" fill="#5b6372">JSON check + retry</text>
+  <rect x="490" y="203" width="130" height="70" rx="6" fill="#fff" stroke="#8cc7a5"/><text x="555" y="231" font-size="12" text-anchor="middle" font-weight="600">retrieve.mjs</text><text x="555" y="249" font-size="10" text-anchor="middle" fill="#5b6372">safe file reader</text>
+  <rect x="640" y="203" width="115" height="70" rx="6" fill="#fff" stroke="#8cc7a5"/><text x="697" y="231" font-size="12" text-anchor="middle" font-weight="600">prompts</text><text x="697" y="249" font-size="10" text-anchor="middle" fill="#5b6372">5 role prompts</text>
+
+  <rect x="10" y="320" width="760" height="140" rx="10" fill="#fff6ec" stroke="#9a4b00"/>
+  <text x="24" y="342" font-size="13" font-weight="700" fill="#9a4b00">GOVERNANCE LAYER (protects and proves)</text>
+  <rect x="30" y="358" width="110" height="80" rx="6" fill="#fff" stroke="#e0b184"/><text x="85" y="386" font-size="12" text-anchor="middle" font-weight="600">gates.mjs</text><text x="85" y="404" font-size="10" text-anchor="middle" fill="#5b6372">GO / --approve</text><text x="85" y="418" font-size="10" text-anchor="middle" fill="#5b6372">or deny</text>
+  <rect x="155" y="358" width="110" height="80" rx="6" fill="#fff" stroke="#e0b184"/><text x="210" y="386" font-size="12" text-anchor="middle" font-weight="600">redact.mjs</text><text x="210" y="404" font-size="10" text-anchor="middle" fill="#5b6372">two-pass secret</text><text x="210" y="418" font-size="10" text-anchor="middle" fill="#5b6372">scrubbing</text>
+  <rect x="280" y="358" width="110" height="80" rx="6" fill="#fff" stroke="#e0b184"/><text x="335" y="386" font-size="12" text-anchor="middle" font-weight="600">ledger.mjs</text><text x="335" y="404" font-size="10" text-anchor="middle" fill="#5b6372">events, decisions,</text><text x="335" y="418" font-size="10" text-anchor="middle" fill="#5b6372">proposals</text>
+  <rect x="405" y="358" width="110" height="80" rx="6" fill="#fff" stroke="#e0b184"/><text x="460" y="386" font-size="12" text-anchor="middle" font-weight="600">cost.mjs</text><text x="460" y="404" font-size="10" text-anchor="middle" fill="#5b6372">served-model</text><text x="460" y="418" font-size="10" text-anchor="middle" fill="#5b6372">price, budget</text>
+  <rect x="530" y="358" width="110" height="80" rx="6" fill="#fff" stroke="#e0b184"/><text x="585" y="386" font-size="12" text-anchor="middle" font-weight="600">report.mjs</text><text x="585" y="404" font-size="10" text-anchor="middle" fill="#5b6372">dashboard,</text><text x="585" y="418" font-size="10" text-anchor="middle" fill="#5b6372">Not verified list</text>
+  <rect x="655" y="358" width="100" height="80" rx="6" fill="#fff" stroke="#e0b184"/><text x="705" y="386" font-size="12" text-anchor="middle" font-weight="600">apply.mjs</text><text x="705" y="404" font-size="10" text-anchor="middle" fill="#5b6372">only writer</text><text x="705" y="418" font-size="10" text-anchor="middle" fill="#5b6372">outside runs/</text>
+
+  <line x1="415" y1="118" x2="415" y2="200" stroke="#3b4fd8" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="415" y1="275" x2="415" y2="355" stroke="#3b4fd8" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="425" y="165" font-size="10" fill="#3b4fd8">request</text>
+  <text x="425" y="318" font-size="10" fill="#3b4fd8">record + gate</text>
+</svg>
+<figcaption>Figure 1. The engine (centre) calls the execution layer for work and the governance layer for control and evidence.</figcaption>
+</figure>
+
+<h3>Source layout</h3>
+<pre><code>bin/orchestrate.mjs        CLI entry (parseArgs, exit codes)
+src/config.mjs             load + validate orchestrator.config.json, env overrides
+src/models.mjs             role -> model, price lookup, which models get server fallbacks
+src/classify.mjs           rule classifier (+ stricter-wins merge of the Haiku assist)
+src/router.mjs             level -> ordered phases
+src/state.mjs              state machine, illegal transitions throw
+src/handoff.mjs            hand-off build / validate / render (redacted)
+src/roles/prompts.mjs      system prompts per role
+src/schemas.mjs            JSON schemas, checker, callStructured (one retry)
+src/providers/             anthropic.mjs, claude-cli.mjs, mock.mjs, index.mjs
+src/retrieve.mjs           safe local file reader
+src/paths.mjs              safeJoin, isInside, deny list (shared by retrieve, ledger, apply)
+src/redact.mjs             secret redaction
+src/gates.mjs              approval gates
+src/ledger.mjs             run folder writer and reader
+src/apply.mjs              gated apply of a finished proposal
+src/cost.mjs               usage x price, budget guard
+src/report.mjs             dashboard (text and JSON)
+src/orchestrator.mjs       the pipeline engine</code></pre>
+
+<h2 id="s3">3. Model roles, effort and prices</h2>
+<table>
+  <tr><th>Role</th><th>Model id</th><th>Effort</th><th>Purpose</th></tr>
+  <tr><td>planner</td><td><code>claude-fable-5-2</code></td><td>high</td><td>Requirements, architecture, spec, acceptance criteria</td></tr>
+  <tr><td>planner fallback</td><td><code>claude-opus-5-5</code></td><td>high</td><td>Used when Fable is unavailable (404), forbidden (403) or refuses. Recorded as a substitution</td></tr>
+  <tr><td>retriever</td><td><code>claude-haiku-5-5</code></td><td>low</td><td>Extract facts from files the controller read</td></tr>
+  <tr><td>builder</td><td><code>claude-sonnet-5-5</code></td><td>medium</td><td>Produce code changes as proposals</td></tr>
+  <tr><td>auditor</td><td><code>claude-opus-5-5</code></td><td>high</td><td>Independent audit with severity findings</td></tr>
+  <tr><td>validator</td><td><code>claude-opus-5-5</code></td><td>high</td><td>Final PASS, FAIL, BLOCKED or PARTIAL</td></tr>
+</table>
+<p>Model ids are exact strings with no date suffix; config validation rejects a suffix such as <code>-20260101</code>. Effort is sent as <code>output_config.effort</code>. The default <code>medium</code> effort on Opus 5.5 and Haiku 5.5 is why every role sets effort explicitly.</p>
+
+<h3>Prices used for cost tracking</h3>
+<table>
+  <tr><th>Model</th><th>Input USD / 1M tokens</th><th>Output USD / 1M tokens</th></tr>
+  <tr><td>claude-fable-5-2</td><td>8.00 (cache read x0.025)</td><td>40.00</td></tr>
+  <tr><td>claude-opus-5-5</td><td>4.00 (cache read x0.05)</td><td>20.00</td></tr>
+  <tr><td>claude-sonnet-5-5</td><td>2.00 (cache read x0.05)</td><td>10.00</td></tr>
+  <tr><td>claude-haiku-5-5</td><td>0.10 (cache read x0.1)</td><td>0.50</td></tr>
+</table>
+<div class="callout"><strong>Verify on the pricing page.</strong> These numbers live in <code>orchestrator.config.json</code> and are the controller's only price source. Cache multipliers are per model in the config (<code>cacheReadMult</code>, <code>cacheWriteMult</code> 1.25). Every <code>usage.iterations</code> entry is priced by the model that ran it. A model that is not in the table is flagged <code>priceKnown: false</code> in the report, and when a budget is set it BLOCKS the run.</div>
+
+<h3>The independence rule</h3>
+<p>The auditor and validator receive a <strong>fresh</strong> message history: no builder conversation, only the spec, the hand-off and the actual proposal file contents read back from disk. Config validation rejects <code>auditor.model == builder.model</code> unless <code>allowSameModelAudit: true</code>. A model reviewing its own work with its own blind spots is not an independent audit.</p>
+
+<h2 id="s4">4. Classification and routing levels</h2>
+<p>The classifier is rule based: case-insensitive, word-bounded keyword matches plus the number of context files. The highest matching level wins. "author" does not trigger "auth", "roller" does not trigger "role". With no match the level defaults to 2 and the reason says so.</p>
+<table>
+  <tr><th>Level</th><th>Triggers</th><th>Route (phases in order)</th></tr>
+  <tr><td>1 simple</td><td>typo, text, copy, colour/color, style, rename, comment, config value, single file</td><td>build, quick-check. The quick check is a Sonnet self-check and is labelled <em>basic verification</em>, never an audit</td></tr>
+  <tr><td>2 moderate</td><td>feature, endpoint, API, workflow, integrate, 2-5 context files</td><td>[retrieve if context] build, [audit if risk is medium or higher], correct loop, validate</td></tr>
+  <tr><td>3 complex</td><td>new module, architecture, database, schema, integration across, multi-service, workflow engine, more than 5 files</td><td>plan, [retrieve], build, audit with correct loop, validate</td></tr>
+  <tr><td>4 critical</td><td>auth, login, password, permission, role, payment, billing, credential, secret, token, encryption, PII, personal data, migration, drop table, deploy production, infrastructure, firewall, DNS</td><td>plan, [retrieve], build, audit, <strong>approval gate</strong>, validate. Any later apply needs a second gate</td></tr>
+</table>
+<p>Classification dimensions follow the policy: complexity (Simple, Moderate, Complex, Critical), risk (low, medium, high, critical), information need (Minimal, Moderate, Extensive), reasoning need (Basic, Advanced, Deep), execution need (Limited, Extensive) and verification need (Basic, Standard, Strict).</p>
+<ul>
+  <li>Keywords are matched as stems (passwords, payments, migrat*, encrypt*, jwt, sessions, cookies, production, tls ...) and strictly on purpose: harmless text such as "design tokens" or "cookie banner" also becomes level 4, because a false level 4 only costs a gate while a missed one skips the gate and the audit.</li>
+  <li><code>--level N</code> may only <strong>raise</strong> the level and is logged as a decision in <code>decisions.md</code>. A lower value is ignored and logged: lowering would skip the gate, audit and validator. The level-4 gate is required whenever risk is critical or the rules said level 4.</li>
+  <li><strong>Layered classifier.</strong> (1) Keyword stems; level 4 also covers personal data (email, phone, address, birthdate, dob, ssn, national id), access rights (admin, privilege, access control, passcode, pin), hashing (hash*, bcrypt, argon*) and live systems (live server or db, db upgrade, schema change, customer data, user data). (2) A Haiku assist, <strong>on by default for real runs</strong>, returns a structured classification. The stricter of rules and Haiku wins: it can only raise the level or risk, never lower them, and both answers are logged in <code>decisions.md</code>. If Haiku is unavailable or errors, the rules result is kept with the note "assist unavailable" and a level 2 task is raised to risk medium so it is audited. <code>--no-assist-classify</code> turns it off (logged); mock runs use a scripted classification. (3) A task that matches no rule is level 2 with risk <strong>medium</strong> and gets an Opus audit. Level 4 also covers health data (medical, patient, hipaa), pay data (salary, payroll), money movement (refund, stripe, paypal, wire transfer, bank account) and cloud write access (s3, bucket, iam, write access). Pure text, style, typo, rename and docs-wording tasks stay level 1.</li>
+  <li>Level 2 risk is <em>medium</em> only when the text mentions API, endpoint or integrate, or two or more context files exist. Otherwise it is low and no audit runs. The report states "No audit ran".</li>
+</ul>
+<pre><code>$ node bin/orchestrate.mjs classify "add login and password reset"
+{ "complexity": "critical", "risk": "critical", "level": 4,
+  "reasons": ["level 4: matched \"login\"", "level 4: matched \"password\""],
+  "route": ["plan","build","audit","gate","validate"] }</code></pre>
+
+<h2 id="s5">5. Pipeline and state machine</h2>
+<p>The engine walks the route. After every transition it writes an event to <code>events.jsonl</code>. An illegal transition throws, so a bug cannot silently skip an audit.</p>
+<h3>State table</h3>
+<table>
+  <tr><th>From</th><th>Allowed next states</th></tr>
+  <tr><td>NEW</td><td>CLASSIFIED</td></tr>
+  <tr><td>CLASSIFIED</td><td>PLANNING, RETRIEVAL, READY_FOR_BUILD</td></tr>
+  <tr><td>PLANNING</td><td>RETRIEVAL, READY_FOR_BUILD</td></tr>
+  <tr><td>RETRIEVAL</td><td>READY_FOR_BUILD</td></tr>
+  <tr><td>READY_FOR_BUILD</td><td>EXECUTING</td></tr>
+  <tr><td>EXECUTING</td><td>AUDIT, VALIDATION, ESCALATED</td></tr>
+  <tr><td>AUDIT</td><td>CORRECTION, APPROVAL_REQUIRED, VALIDATION, ESCALATED</td></tr>
+  <tr><td>CORRECTION</td><td>AUDIT, ESCALATED</td></tr>
+  <tr><td>APPROVAL_REQUIRED</td><td>VALIDATION</td></tr>
+  <tr><td>VALIDATION</td><td>COMPLETE, ESCALATED</td></tr>
+  <tr><td>COMPLETE</td><td>CLOSED</td></tr>
+  <tr><td>ESCALATED</td><td>PLANNING (re-plan)</td></tr>
+  <tr><td>any non-terminal</td><td>BLOCKED, CANCELLED</td></tr>
+  <tr><td>CLOSED, BLOCKED, CANCELLED</td><td>terminal: no further transition</td></tr>
+</table>
+<div class="callout"><strong>Reading "BLOCKED at APPROVAL_REQUIRED".</strong> A level 4 run without approval moves to APPROVAL_REQUIRED, the gate is denied, and the run ends in BLOCKED. The report records <code>blockedAt</code> so you can see where it stopped.</div>
+
+<h3>Audit, correct, validate loop</h3>
+<ol>
+  <li>The builder produces proposal round 1. The controller writes it under <code>proposals/round-1/</code>.</li>
+  <li>A fresh auditor reads the proposal files from disk and returns findings with severity Critical, High, Medium, Low or Informational.</li>
+  <li>Critical or High findings block. The builder gets the findings and the previous proposal and produces a revised round. A fresh auditor re-audits. This repeats for at most <code>maxCorrectionRounds</code> (default 2).</li>
+  <li>Unresolved Critical or High after the last round: status FAIL, state ESCALATED, a human must decide. Medium and lower findings do not block and travel to the validator.</li>
+  <li>Level 4 only: the approval gate.</li>
+  <li>A fresh validator returns PASS, FAIL, BLOCKED or PARTIAL with a list of what it could not verify.</li>
+</ol>
+<h3>Escalations</h3>
+<ul>
+  <li><strong>Builder says the plan is wrong</strong> (<code>planFlaw: true</code>): back to the planner once, then the builder rebuilds. A second flaw is listed under Not verified and the run continues.</li>
+  <li><strong>Auditor finding of category architecture with severity High or Critical:</strong> planner re-plan (once), then rebuild.</li>
+  <li><strong>Business or authorization questions:</strong> the planner returns <code>humanQuestions</code>. The <code>human</code> gate asks for a decision; denied means the run ends BLOCKED and the report lists the questions under OPEN QUESTIONS FOR A HUMAN.</li>
+</ul>
+<p>Each escalation is an event in the ledger and a line in <code>decisions.md</code>.</p>
+
+<h2 id="s6">6. The hand-off contract</h2>
+<p>Each model call starts with a hand-off because the next model shares no memory with the last one. The object follows the policy's Appendix A. It is validated before every delegation. A missing required field makes the step <code>BLOCKED</code> instead of sending a half-empty briefing. It is passed through <code>redact()</code> before it is saved to <code>handoffs/NN-role.json</code> or put in a prompt.</p>
+<table>
+  <tr><th>Field</th><th>Content</th><th>Required</th></tr>
+  <tr><td>project</td><td>Project name (folder name of the root)</td><td>yes</td></tr>
+  <tr><td>task</td><td>The task text, redacted</td><td>yes</td></tr>
+  <tr><td>classification</td><td>Level, complexity, risk, needs</td><td>yes</td></tr>
+  <tr><td>currentState</td><td>State machine state</td><td>yes</td></tr>
+  <tr><td>decisions</td><td>Overrides, routes, escalations, substitutions</td><td>no</td></tr>
+  <tr><td>evidence</td><td>Steps that completed OK</td><td>no</td></tr>
+  <tr><td>findings</td><td>Grouped by severity</td><td>no</td></tr>
+  <tr><td>nextAssignment</td><td>Role and exact instructions</td><td>yes</td></tr>
+  <tr><td>approval</td><td>Required and granted</td><td>no</td></tr>
+  <tr><td>handoffStatus</td><td>READY, BLOCKED or NEEDS_CLARIFICATION. Only READY may be delegated</td><td>yes</td></tr>
+</table>
+<pre><code>{
+  "project": "sample-project",
+  "task": "fix typo in README",
+  "classification": { "level": 1, "complexity": "simple", "risk": "low", "verification": "Basic" },
+  "currentState": "EXECUTING",
+  "decisions": ["route: build > quick-check"],
+  "evidence": [],
+  "findings": { "Critical": [], "High": [], "Medium": [], "Low": [] },
+  "nextAssignment": { "role": "builder", "instructions": "Produce the proposal that meets the spec." },
+  "approval": { "required": false, "granted": null },
+  "handoffStatus": "READY"
+}</code></pre>
+<p>The builder returns a structured object: <code>summary</code>, <code>planFlaw</code>, <code>planFlawReason</code>, <code>files[{path, action, content}]</code>, <code>testsSuggested</code> and <code>limitations</code>. The controller validates every path before writing anything, and a bad path counts as invalid output (one retry, then the step fails).</p>
+
+<h2 id="s7">7. Provider details</h2>
+<h3>7.1 Anthropic provider (<code>src/providers/anthropic.mjs</code>)</h3>
+<ul>
+  <li>Official SDK, <code>new Anthropic({ maxRetries: 2 })</code>. Credentials come only from the environment or an <code>ant auth login</code> profile. Nothing is hardcoded or logged. The client is injectable so tests pass a fake.</li>
+  <li>Streaming with <code>await stream.finalMessage()</code>. Default <code>max_tokens</code> 32000, configurable per role.</li>
+  <li>Effort as <code>output_config: { effort }</code>. The <code>thinking</code> parameter is omitted (adaptive by default on these models).</li>
+  <li><strong>Never sent</strong>: <code>budget_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>top_k</code>, an assistant prefill, a forced <code>tool_choice</code> of <code>any</code> or <code>tool</code>. The tests assert none of these appear in any request body.</li>
+  <li>Structured output: <code>output_config.format = { type: "json_schema", schema }</code>. The text block is parsed with <code>JSON.parse</code> and checked against the schema in code (required keys, enums, types, extra keys). On failure one retry runs with the validation error appended as a new user message, then the step fails.</li>
+  <li>Refusal fallbacks for the exact ids <code>claude-fable-5-2</code>, <code>claude-opus-5-5</code> and <code>claude-sonnet-5-5</code> (not a name pattern; any other id, including dated variants and Haiku, gets none): <code>client.beta.messages.stream({ ..., betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })</code>. Controlled by <code>serverFallbacks</code>. Haiku gets no fallbacks parameter. A fallback is detected from <code>usage.iterations</code> entries of type <code>fallback_message</code> or content blocks of type <code>fallback</code> and recorded as <code>fallbackRan</code> with <code>servedModel</code> from the response.</li>
+  <li><code>stop_reason</code> is checked before content is read. <code>refusal</code> fails the step with the <code>stop_details.category</code>. <code>max_tokens</code> fails with "truncated, raise max_tokens". Only <code>end_turn</code> is success.</li>
+</ul>
+<h3>Error handling (typed, never string-matched)</h3>
+<table>
+  <tr><th>SDK class</th><th>Meaning here</th></tr>
+  <tr><td><code>AuthenticationError</code> (401)</td><td>Provider not usable: step and run BLOCKED</td></tr>
+  <tr><td><code>PermissionDeniedError</code> (403)</td><td>Treated like "model unavailable": try the role fallback model and record the substitution; without a fallback the step FAILS</td></tr>
+  <tr><td><code>NotFoundError</code> (404)</td><td>Model unavailable: try the role fallback model, record the substitution</td></tr>
+  <tr><td><code>BadRequestError</code> (400)</td><td>Step FAILED with the API message</td></tr>
+  <tr><td><code>RateLimitError</code>, 5xx <code>APIError</code></td><td>The SDK retries twice, then the step FAILS</td></tr>
+  <tr><td><code>APIConnectionError</code></td><td>Step FAILED</td></tr>
+</table>
+<h3>Capability check and probe</h3>
+<p><code>capabilityCheck()</code> returns <code>{available, reason}</code>. It reports available if <code>ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_AUTH_TOKEN</code> is set, or an <code>ant</code> profile directory exists (a heuristic). It reports the variable <em>name</em> only, never a value. <code>doctor --probe</code> calls <code>client.models.retrieve(id)</code> for every configured model (no tokens spent) and lists which models the account can use.</p>
+
+<h3>7.2 Claude CLI provider (default)</h3>
+<p>The default provider, because it uses the Owner's Claude Code login and needs no API key. It runs <code>claude -p --model &lt;id&gt; --output-format json --tools "" --strict-mcp-config --setting-sources "" --disallowedTools "mcp__*" --no-session-persistence --effort &lt;level&gt;</code> with the whole prompt on <strong>stdin</strong>, so no user text is in argv. These flags make the child a plain text model: no tools, no MCP servers or connectors, no hooks, plugins or project settings, no saved session. It spawns with <code>shell: false</code> and an args array, with its working directory set to a fresh empty temp folder that is removed afterwards. It applies a 120 second timeout (a cold start takes 11 to 35 seconds on the dev PC) and kills the child on timeout.</p>
+<ul>
+  <li><strong>Served model:</strong> the <code>modelUsage</code> key that matches the requested model (the CLI may use other models for side work, so the first key is never trusted). Several keys with no match, or none, is recorded as <code>"unverified"</code> and listed under Not verified.</li>
+  <li><strong>Cost:</strong> the cost the CLI reports (labelled "cost reported by claude CLI"), otherwise "subscription - not metered", which has <code>priceKnown: false</code> and cannot satisfy a budget.</li>
+  <li><strong>Verified live:</strong> a one-word Haiku call authenticated with <code>--setting-sources ""</code> and reported the served model. If a later CLI version stops authenticating that way, fall back to <code>--setting-sources user</code> and treat user hooks as a limitation.</li>
+  <li><code>doctor --probe</code> makes that one tiny Haiku call and prints the result.</li>
+</ul>
+<h3>7.3 Mock provider</h3>
+<p>A deterministic scripted provider for tests and <code>--dry-run</code>. Replies are queued per step kind and the last reply repeats. It always returns <code>provider: "mock"</code> and <code>servedModel: "mock"</code>, zero tokens and zero cost.</p>
+
+<h2 id="s8">8. Security model and limits</h2>
+<table>
+  <tr><th>Control</th><th>How it works</th></tr>
+  <tr><td>No shell from model output</td><td>The controller never passes model text to a shell, <code>eval</code> or <code>spawn</code>. The only child process is the optional <code>claude</code> binary with a fixed args array.</td></tr>
+  <tr><td>Proposals, not writes</td><td>The builder's files are written only under <code>runs/&lt;id&gt;/proposals/</code> through <code>safeJoin</code>.</td></tr>
+  <tr><td>Gated apply</td><td><code>apply</code> is the only code that writes outside <code>runs/</code>. It needs status PASS (or PARTIAL plus a forcePartial gate), an <code>apply</code> gate, and a separate <code>delete</code> gate. Deletes are moved into <code>.orchestrator-trash/&lt;runId&gt;/</code> in the target and never hard-deleted.</td></tr>
+  <tr><td>Path safety</td><td>Rejects empty, NUL and control characters, absolute, drive-letter, <code>..</code>, <code>:</code> (NTFS streams), <strong>8.3 short-name segments (<code>GIT~1</code>)</strong>, Windows device names, trailing dot or space, symlink or junction escapes. JavaScript's plain <code>realpath</code> keeps short names, so a path like <code>GIT~1/hooks/pre-commit</code> once reached <code>.git/hooks</code>; now short names are rejected and every deny check also runs on every segment of the <code>realpath.native</code> result. Comparison is case-insensitive on Windows.</td></tr>
+  <tr><td>Apply hygiene</td><td>Mock runs are refused. The gate listing escapes control characters and prints a WARNING for executable-ish targets (<code>.git*</code>, <code>.husky/</code>, <code>.vscode/tasks.json</code>, CI workflows, <code>package.json</code>, <code>*.ps1|bat|cmd|sh</code>).</td></tr>
+  <tr><td>claude-cli isolation</td><td>Isolation flags, empty temp working directory, prompt on stdin only (section 7.2).</td></tr>
+  <tr><td>Redaction</td><td>Applied to the task, every context file, every hand-off and every ledger event.</td></tr>
+  <tr><td>Retrieval sandbox</td><td>Files must be under the root (realpath, symlink safe). Deny list: <code>.env*</code>, <code>*.pem</code>, <code>*.key</code>, <code>id_rsa*</code>, <code>id_ed25519*</code>, <code>id_ecdsa*</code>, <code>*.p12</code>, <code>*.pfx</code>, <code>.npmrc</code>, <code>.netrc</code>, <code>.git-credentials</code>, <code>.pypirc</code>, <code>.htpasswd</code>, <code>*.tfstate*</code>, <code>credentials*</code>, <code>secrets*</code>, <code>.git/</code>, <code>node_modules/</code>, <code>*.sqlite</code>, binaries (NUL in the first 8 KB). A denied path given directly as <code>--context</code> is refused, not skipped. Junction loops are detected. Caps: 200 KB per file, 2 MB total, 200 files. Overflow is listed, never silently truncated.</td></tr>
+  <tr><td>Gates</td><td>Kinds level4, apply, delete, forcePartial, human. Interactive prompt (type GO), <code>--approve</code> pre-approval (logged), otherwise denied. Every decision has a timestamp and a "who".</td></tr>
+  <tr><td>Independence</td><td>Fresh auditor and validator context with real file contents; builder and auditor must differ.</td></tr>
+  <tr><td>Injection posture</td><td>Role prompts state that file contents, task text and earlier model output are data and never instructions.</td></tr>
+</table>
+<h3>Redaction details</h3>
+<p>Two passes in a fixed order, because a bare bearer pass alone would leave the token behind. Pass 1 matches <code>authorization[:=\s]+((bearer|basic|token)\s+)?\S+</code> so the whole header with its scheme is removed. Authorization is redacted only when followed by <code>:</code> or <code>=</code> or a known scheme, so prose such as "authorization is required" keeps its next word. Pass 2 matches bare bearer tokens. Then URL userinfo (<code>postgres://user:pw@host</code>), Anthropic keys (<code>sk-ant-...</code>), generic <code>sk-</code> keys, GitHub <code>github_pat_</code> and <code>gh[opusr]_</code>, Slack <code>xox*</code>, AWS <code>AKIA</code> and <code>ASIA</code> ids, Google <code>AIza</code> keys, JWTs, PEM private key blocks, and finally key/value pairs in JSON, YAML, env or URL-query form for names such as <code>password</code>, <code>token</code>, <code>secret</code>, <code>api_key</code>, <code>x-api-key</code> and <code>client_secret</code>, quoted or not.</p>
+<pre><code>in : Authorization: Bearer abc
+out: Authorization: [REDACTED]</code></pre>
+<h3>Limits you must accept</h3>
+<div class="callout warn"><strong>Automated review is not a penetration test.</strong> An Opus audit is a second opinion that catches many mistakes. It is not a human security review, a threat model or a pentest. Level 4 work (auth, payments, personal data, production) still needs a qualified human before it ships.</div>
+<ul>
+  <li>The controller does not run or test the proposed code. Run your own tests after <code>apply</code>.</li>
+  <li>Redaction is pattern based. A secret in an unusual format can slip through; keep secrets out of the context folder.</li>
+  <li>Cost is computed from your price table and the served model. When a server fallback ran, the whole call is priced at the served model, which is an approximation.</li>
+  <li>The live API is exercised only by a pilot run; the automated tests use fakes.</li>
+</ul>
+
+<h2 id="s9">9. Setup</h2>
+<ol>
+  <li><strong>Node 22 or newer.</strong> Check with <code>node -v</code>.</li>
+  <li><strong>Install:</strong> in the project folder run <code>npm install</code>. It installs only <code>@anthropic-ai/sdk</code>.</li>
+  <li><strong>Credentials</strong> (real runs only): the default <code>claude-cli</code> provider uses your Claude Code login, so just be signed in to Claude Code. For the Anthropic API alternative (<code>--provider anthropic</code>) run <code>ant auth login</code> or set <code>ANTHROPIC_API_KEY</code> (or <code>ANTHROPIC_AUTH_TOKEN</code>) in your shell. Do not paste a key into a file in this folder.</li>
+  <li><strong>Check:</strong> <code>node bin/orchestrate.mjs doctor --probe</code> validates the config, reports each provider as AVAILABLE or BLOCKED, and probes which models your account can use.</li>
+  <li><strong>Smoke test without spending:</strong> <code>node bin/orchestrate.mjs run "fix typo in README" --dry-run --root examples/sample-project</code>.</li>
+</ol>
+<pre><code>$ node bin/orchestrate.mjs doctor
+Node v26.12.1 (need >= 22): OK
+Config: OK (orchestrator.config.json valid, independence rule satisfied)
+Providers:
+  anthropic   BLOCKED: no credentials: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, or run `ant auth login`
+  claude-cli  AVAILABLE: claude binary found (login state not verified)
+  mock        AVAILABLE: mock provider (no model is ever called)
+Default provider "claude-cli": AVAILABLE</code></pre>
+<p><code>doctor</code> exits 0 whenever the configuration is valid, even if a provider is BLOCKED. A real <code>run</code> whose provider is unavailable ends <code>BLOCKED</code> (exit 2) and states that no model was called.</p>
+
+<h2 id="s10">10. CLI reference and exit codes</h2>
+<pre><code>orchestrate doctor [--probe]             provider + model availability, config check
+orchestrate classify "&lt;task&gt;" [--context ...]
+orchestrate run "&lt;task&gt;" [--task-file f] [--context paths] [--root dir] [--level N]
+                [--provider anthropic|claude-cli|mock] [--approve kinds] [--budget-usd N]
+                [--max-rounds N] [--no-assist-classify] [--dry-run]
+orchestrate status &lt;runId&gt;
+orchestrate report &lt;runId&gt; [--json]
+orchestrate apply &lt;runId&gt; --target &lt;dir&gt; [--approve apply,delete,forcePartial]
+orchestrate runs</code></pre>
+<table>
+  <tr><th>Option</th><th>Meaning</th></tr>
+  <tr><td><code>--context</code></td><td>Files or folders under <code>--root</code>; repeatable or comma separated</td></tr>
+  <tr><td><code>--root</code></td><td>Project root (default: current folder). If given without <code>--context</code>, the whole root is the context</td></tr>
+  <tr><td><code>--level N</code></td><td>Raise the level to 1-4 (logged). Lower values are ignored</td></tr>
+  <tr><td><code>--provider</code></td><td>Override the configured provider (default <code>claude-cli</code>)</td></tr>
+  <tr><td><code>--approve kinds</code></td><td>Pre-approve gates, comma separated: level4, apply, delete, forcePartial, human</td></tr>
+  <tr><td><code>--budget-usd N</code></td><td>Hard stop: a step whose worst case would exceed the remaining budget is BLOCKED before it runs</td></tr>
+  <tr><td><code>--max-rounds N</code></td><td>Correction rounds (default 2)</td></tr>
+  <tr><td><code>--dry-run</code></td><td>Force the mock provider; the banner says so</td></tr>
+  <tr><td><code>--no-assist-classify</code></td><td>Turn off the Haiku classification assist (on by default for real runs; logged). <code>--assist-classify</code> forces it on for mock runs</td></tr>
+</table>
+<h3>Exit codes</h3>
+<table>
+  <tr><th>Code</th><th>Meaning</th></tr>
+  <tr><td>0</td><td>PASS</td></tr>
+  <tr><td>1</td><td>FAIL</td></tr>
+  <tr><td>2</td><td>BLOCKED (no provider, gate denied, budget, validator blocked); also a refused <code>apply</code></td></tr>
+  <tr><td>3</td><td>PARTIAL</td></tr>
+  <tr><td>4</td><td>Usage or configuration error</td></tr>
+</table>
+<h3>Examples</h3>
+<pre><code>orchestrate run "fix typo in README" --dry-run --root examples/sample-project        # exit 0, MOCK banner
+orchestrate run "add login and password reset" --dry-run                              # exit 2, BLOCKED at APPROVAL_REQUIRED
+orchestrate run "add login and password reset" --dry-run --approve level4             # exit 0
+orchestrate run --task-file examples/sample-task.md --root examples/sample-project --provider anthropic --budget-usd 1
+orchestrate apply 20261118-122632-db63b9 --target ../my-project --approve apply</code></pre>
+
+<h2 id="s11">11. Run folder and reading reports</h2>
+<pre><code>runs/20261118-122632-db63b9/
+  events.jsonl      append-only: every transition, step, gate, escalation, apply (redacted)
+  decisions.md      human-readable decisions: route, overrides, escalations, substitutions, gates
+  changelog.md      each proposal round and the files in it
+  run.json          final state: status, steps, findings, cost, Not verified list
+  handoffs/01-planner.json, 02-builder.json ...   the redacted hand-off sent at each step
+  proposals/round-N/manifest.json and files/...   the builder's proposed files</code></pre>
+<p>The run id is <code>YYYYMMDD-HHMMSS-&lt;6 hex&gt;</code>. Ids are validated before any path is built, so <code>report ../x</code> cannot escape the runs folder.</p>
+<h3>Report sections (<code>orchestrate report &lt;id&gt;</code>)</h3>
+<table>
+  <tr><th>Section</th><th>What to look for</th></tr>
+  <tr><td>Banner</td><td><code>MOCK RUN — no model was called</code> means nothing below was reviewed by a model</td></tr>
+  <tr><td>TASK, CLASSIFICATION</td><td>Level and the exact rule matches that caused it</td></tr>
+  <tr><td>MODEL ROUTING</td><td>One line per step: provider, <strong>requested</strong> vs <strong>served</strong> model, <code>server fallback RAN</code>, <code>SUBSTITUTED a -> b</code></td></tr>
+  <tr><td>EXECUTION PLAN</td><td>The route that was chosen</td></tr>
+  <tr><td>CURRENT STATUS</td><td>PASS, FAIL, BLOCKED or PARTIAL, the final state, and <code>BLOCKED at &lt;state&gt;</code></td></tr>
+  <tr><td>FINDINGS</td><td>Latest audit findings grouped by severity</td></tr>
+  <tr><td>QUALITY GATE</td><td>Validator verdict, or "basic verification only" for level 1; gate decisions with who and when</td></tr>
+  <tr><td>NEXT ACTION</td><td>The one next step</td></tr>
+  <tr><td>COST</td><td>Total USD against the budget</td></tr>
+  <tr><td>NOT VERIFIED</td><td>Everything that did not run or could not be confirmed. Read this before trusting a PASS</td></tr>
+</table>
+<p><code>report --json</code> prints the same data in machine form. <code>apply</code> reads the final proposal round from the run folder, shows the file list and asks for the gate.</p>
+
+<h2 id="s12">12. Testing</h2>
+<p><code>npm test</code> runs <code>node --test "test/*.test.mjs"</code>. Everything is offline: the mock provider, a fake Anthropic client that records every request body, and a fake <code>spawn</code> for the CLI provider. No test needs credentials or the network.</p>
+<table>
+  <tr><th>Area</th><th>Covered</th></tr>
+  <tr><td>Classifier</td><td>Levels, word boundaries, override logged, model assist can raise but never lower</td></tr>
+  <tr><td>Router and state machine</td><td>Phases per level; legal and illegal transitions; any state to BLOCKED; BLOCKED terminal</td></tr>
+  <tr><td>Hand-off</td><td>Validation of missing fields, redaction when rendered</td></tr>
+  <tr><td>Redaction</td><td>Mixed secret sample including <code>Authorization: Bearer abc</code>; the real output is printed in the test log</td></tr>
+  <tr><td>Retrieval</td><td>Outside-root rejected, symlink escape, deny list, binary skip, caps reported not truncated</td></tr>
+  <tr><td>Path safety</td><td><code>..</code>, absolute, <code>C:\</code>, NUL, colon, device names; protected names on apply</td></tr>
+  <tr><td>Gates</td><td>Non-TTY deny, pre-approval, interactive GO</td></tr>
+  <tr><td>Cost</td><td>Per-token maths at the served model price, cache pricing, budget guard</td></tr>
+  <tr><td>Schemas</td><td>Validation and exactly one retry with the error appended</td></tr>
+  <tr><td>Anthropic provider (fake client)</td><td>Success, refusal, max_tokens, 404 to fallback model with substitution, 401 BLOCKED, 403, 429, 5xx, connection, fallback-ran detection, request bodies never contain <code>budget_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>top_k</code>, forced <code>tool_choice</code> or a prefill</td></tr>
+  <tr><td>Claude CLI provider (fake spawn)</td><td>Args array, <code>shell:false</code>, prompt on stdin, tools disabled, timeout kills the child, unverified served model</td></tr>
+  <tr><td>Pipeline end to end</td><td>L1; L3 with one correction round; L4 blocked without approval and passing with <code>--approve level4</code>; audit FAIL after max rounds exits 1; builder plan flaw triggers a re-plan event; MOCK banner; served model recorded; no provider means BLOCKED not fake success; budget block; secrets never reach the provider</td></tr>
+  <tr><td>CLI</td><td>The acceptance commands as real processes, usage errors exit 4, status, report, runs, apply</td></tr>
+</table>
+
+<h2 id="s13">13. Pilot plan</h2>
+<p>Follow the policy's deployment sequence: prove the pipeline cheaply on low-risk work, then widen.</p>
+<ol>
+  <li><strong>Day 0, free:</strong> <code>npm test</code> and the two dry-run acceptance commands. Read the mock report and the run folder.</li>
+  <li><strong>Day 1, probe:</strong> set credentials, run <code>doctor --probe</code>. Confirm which of the four models your account can use. If Fable is unavailable the planner will substitute Opus; the report will say so.</li>
+  <li><strong>Pilot A, level 1:</strong> <code>examples/sample-task.md</code> against <code>examples/sample-project</code> with <code>--provider anthropic --budget-usd 0.50</code>. Check that <code>servedModel</code> matches the request and that the proposal changes only the typo.</li>
+  <li><strong>Pilot B, level 2 or 3:</strong> a small real change in a scratch copy of a project with <code>--context</code>. Confirm the audit actually reads the proposal and the cost matches your expectation.</li>
+  <li><strong>Pilot C, level 4 dry run of governance:</strong> a critical-sounding task without <code>--approve</code>; confirm it stops at APPROVAL_REQUIRED. Then approve and review the gate record.</li>
+  <li><strong>Apply rehearsal:</strong> <code>apply</code> into a throwaway folder first, with and without the gates.</li>
+  <li><strong>Decide:</strong> review the Not verified lists and the real costs. Adjust prices, efforts and rounds in <code>orchestrator.config.json</code>. Only then use it on real project folders, always on a branch with tests.</li>
+</ol>
+
+<h2 id="s14">14. Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Cause and fix</th></tr>
+  <tr><td>Run ends <code>BLOCKED</code> with "provider ... not available"</td><td>For <code>claude-cli</code>: the <code>claude</code> binary is not on PATH (set <code>ORCH_CLAUDE_BIN</code>) or you are not signed in to Claude Code. For <code>anthropic</code>: no credentials; run <code>ant auth login</code> or set <code>ANTHROPIC_API_KEY</code>. Check with <code>doctor --probe</code>. Use <code>--dry-run</code> for a labelled mock run.</td></tr>
+  <tr><td>BLOCKED "human decision required"</td><td>The planner raised business or authorization questions. Answer them in the task text and re-run, or approve with <code>--approve human</code> to proceed on the planner's assumptions (recorded in Not verified).</td></tr>
+  <tr><td><code>--level 1</code> had no effect</td><td>Intended: an override may only raise the level. Lowering would skip the gate and the audit.</td></tr>
+  <tr><td>"context path ... protected and refused" or "8.3 short name rejected"</td><td>You named a denied path (<code>.git</code>, <code>.env</code>, <code>.npmrc</code> ...) or a Windows short name such as <code>PROGRA~1</code> directly. Use the long name or pick a different folder.</td></tr>
+  <tr><td>apply refused "mock provider"</td><td>Mock output is scripted and is never applied. Re-run with a real provider.</td></tr>
+  <tr><td>BLOCKED "price unknown ... cannot enforce --budget-usd"</td><td>The served model is not in the price table (or the CLI reported no cost). Add it to <code>prices</code> or drop <code>--budget-usd</code>.</td></tr>
+  <tr><td><code>claude-cli</code> auth fails with the isolation flags</td><td>Run <code>claude</code> once interactively to sign in. If it still fails with <code>--setting-sources ""</code>, use <code>user</code> (limitation: user hooks load).</td></tr>
+  <tr><td>401 / "authentication failed"</td><td>Key invalid or expired. The step and run are BLOCKED. Re-login or replace the key. The tool never prints it.</td></tr>
+  <tr><td>404 model not found</td><td>Your account cannot use that model id. The planner substitutes its fallback (recorded). For other roles edit <code>roles.&lt;role&gt;.model</code> or add <code>fallbackModel</code>. Check <code>doctor --probe</code>.</td></tr>
+  <tr><td>403 permission denied</td><td>Model not enabled for the organisation. Same handling as 404 when a fallback model exists.</td></tr>
+  <tr><td>Step FAILED "refusal (category: ...)"</td><td>A safety classifier declined. With <code>serverFallbacks</code> the API already tried a fallback model. Reword the task, or accept the failure; do not try to evade the classifier.</td></tr>
+  <tr><td>Step FAILED "truncated (max_tokens)"</td><td>Raise <code>roles.&lt;role&gt;.maxTokens</code> in the config. Streaming is already used.</td></tr>
+  <tr><td>429 rate limit</td><td>The SDK retried twice. Wait, lower parallel use of the account, and re-run.</td></tr>
+  <tr><td>"invalid structured output after one retry"</td><td>The model did not return valid JSON for the schema twice. Re-run; if it repeats, simplify the task or raise <code>maxTokens</code>.</td></tr>
+  <tr><td>BLOCKED "budget exhausted"</td><td>The worst-case estimate (input estimate plus full <code>max_tokens</code> output) exceeds the remaining budget. Raise <code>--budget-usd</code> or lower the role <code>maxTokens</code>.</td></tr>
+  <tr><td>BLOCKED "level-4 approval required"</td><td>Intended. Re-run with <code>--approve level4</code> or in an interactive terminal and type GO.</td></tr>
+  <tr><td>FAIL "unresolved after N correction rounds"</td><td>The builder could not fix Critical or High findings. Read the findings, adjust the task or fix by hand.</td></tr>
+  <tr><td><code>claude-cli</code> very slow or timed out</td><td><code>claude -p</code> cold start is 11 to 35 seconds on this PC; the timeout is 120 seconds. Check that you are logged in to Claude Code. Served model may show "unverified".</td></tr>
+  <tr><td>"context path outside root rejected"</td><td>The path is outside <code>--root</code> (after symlink resolution). Move the files or change the root.</td></tr>
+  <tr><td>File missing from context</td><td>It was skipped (deny list, too large, binary). The report lists each skipped path with the reason.</td></tr>
+  <tr><td>apply refused</td><td>Run not PASS, a gate was denied, or the proposal touches a protected path. Read the message; nothing was written.</td></tr>
+</table>
+
+<h2 id="s15">15. Cost notes</h2>
+<ul>
+  <li><strong>What is measured:</strong> per step <code>inputTokens</code>, <code>outputTokens</code>, <code>cacheRead</code>, <code>cacheWrite</code> and <code>usd</code>, from the API <code>usage</code> of the <em>served</em> model times your price table. The run total is in <code>run.json</code> and the report.</li>
+  <li><strong>Where the money goes:</strong> Opus audit and validation steps and Fable planning dominate. Level 1 work costs a Sonnet build plus a Sonnet check. Every correction round adds one Sonnet build and one Opus audit.</li>
+  <li><strong>Input size matters:</strong> the builder, auditor and validator all receive the context files. Keep <code>--context</code> narrow; the 2 MB cap is a ceiling, not a target.</li>
+  <li><strong>Budget guard:</strong> before each step the controller estimates input at one token per three characters plus the full <code>max_tokens</code> output at the output price. This is checked before every paid attempt (the structured-output retry and a fallback model are separate attempts) and each attempt's cost is booked right after it. If the estimate exceeds what is left of <code>--budget-usd</code>, the run is BLOCKED before that attempt. The estimate is deliberately pessimistic, so a tiny budget blocks early.</li>
+  <li><strong>Mock and CLI runs:</strong> mock costs nothing. The CLI provider uses your subscription: the report shows the cost the CLI reports (labelled) or "subscription - not metered".</li>
+  <li><strong>Server fallbacks:</strong> each <code>usage.iterations</code> entry is priced by the model that ran it. The iteration field names are assumed from the documented fallback fields and not seen live, so compare with your Anthropic usage page. Tokens of a refused attempt retried on a fallback model are not recorded.</li>
+  <li><strong>Tuning levers:</strong> lower effort for the retriever and builder, keep audit effort high, lower <code>maxTokens</code>, fewer correction rounds, narrower context. Measure on real tasks before changing defaults.</li>
+  <li><strong>Prices change.</strong> Verify the table on the pricing page before relying on dollar figures.</li>
+</ul>
+
+</body>
+</html>

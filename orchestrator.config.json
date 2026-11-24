@@ -1,0 +1,72 @@
+{
+  "provider": "claude-cli",
+  "serverFallbacks": true,
+  "allowSameModelAudit": false,
+  "budgetUsd": null,
+  "limits": {
+    "maxCorrectionRounds": 2,
+    "maxReplans": 1
+  },
+  "roles": {
+    "planner": {
+      "model": "claude-fable-5-2",
+      "effort": "high",
+      "maxTokens": 32000,
+      "fallbackModel": "claude-opus-5-5"
+    },
+    "retriever": {
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "maxTokens": 16000
+    },
+    "builder": {
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "maxTokens": 32000
+    },
+    "auditor": {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "maxTokens": 32000
+    },
+    "validator": {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "maxTokens": 16000
+    }
+  },
+  "pricesNote": "USD per 1M tokens plus cache multipliers (x input price). Verify on the Anthropic pricing page before trusting cost numbers.",
+  "prices": {
+    "claude-fable-5-2": {
+      "in": 8,
+      "out": 40,
+      "cacheReadMult": 0.025,
+      "cacheWriteMult": 1.25
+    },
+    "claude-opus-5-5": {
+      "in": 4,
+      "out": 20,
+      "cacheReadMult": 0.05,
+      "cacheWriteMult": 1.25
+    },
+    "claude-sonnet-5-5": {
+      "in": 2,
+      "out": 10,
+      "cacheReadMult": 0.05,
+      "cacheWriteMult": 1.25
+    },
+    "claude-haiku-5-5": {
+      "in": 0.1,
+      "out": 0.5,
+      "cacheReadMult": 0.1,
+      "cacheWriteMult": 1.25
+    }
+  },
+  "gates": [
+    "level4",
+    "apply",
+    "delete",
+    "forcePartial",
+    "human"
+  ]
+}
